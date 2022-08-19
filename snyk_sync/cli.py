@@ -1,11 +1,18 @@
 import json
 import logging
 import os
+import typer
+import yaml
 from datetime import datetime as dt
 from datetime import timedelta
+from github import Github
+from github.ContentFile import ContentFile
+from github.PaginatedList import PaginatedList
 from os import environ
 from pathlib import Path
 from pprint import pprint
+from snyk.client import SnykClient
+from snyk.errors import SnykHTTPError
 from typing import Any
 from typing import Dict
 from typing import List
@@ -13,26 +20,21 @@ from typing import Optional
 from uuid import UUID
 
 import api
-import typer
-import yaml
 from __version__ import __version__
-from api import RateLimit
-from github import Github
-from github.ContentFile import ContentFile
-from github.PaginatedList import PaginatedList
 from models.organizations import Orgs
 from models.repositories import Repo
 from models.sync import Settings
 from models.sync import SnykWatchList
-from snyk.client import SnykClient
-from snyk.errors import SnykHTTPError
 from utils import default_settings
+from utils import filter_chunk
+from utils import get_page_wrapper
 from utils import jopen
 from utils import jwrite
 from utils import load_watchlist
 from utils import update_client
 from utils import yopen
-
+from utils import get_organization_wrapper
+from utils import get_repos_wrapper
 
 app = typer.Typer(add_completion=False)
 
@@ -174,13 +176,7 @@ def main(
 
 
 @app.command()
-def sync(
-    show_rate_limit: bool = typer.Option(
-        False,
-        "--show-rate-limit",
-        help="Display GH rate limit status between each batch of API calls",
-    )
-):
+def sync():
     """
     Force a sync of the local cache of the GitHub / Snyk data.
     """
@@ -198,11 +194,9 @@ def sync(
 
     watchlist.repos = tmp_watch.repos
 
-    GH_PAGE_LIMIT = 100
+    GH_PAGE_LIMIT = 1
 
     gh = Github(s.github_token, per_page=GH_PAGE_LIMIT)
-
-    rate_limit = RateLimit(gh, GH_PAGE_LIMIT)
 
     client = SnykClient(str(s.snyk_token), user_agent=f"pysnyk/snyk_services/sync/{__version__}", tries=2, delay=1)
 
@@ -220,8 +214,6 @@ def sync(
     else:
         gh_orgs = list()
 
-    rate_limit.update(show_rate_limit)
-
     exclude_list: list = []
 
     typer.echo("Getting all GitHub repos", err=True)
@@ -229,11 +221,9 @@ def sync(
     repo_ids: list = []
 
     for gh_org_name in gh_orgs:
-        gh_org = gh.get_organization(gh_org_name)
+        gh_org = utils.get_organization_wrapper(gh, gh_org_name)
         gh_repos = gh_org.get_repos(type="all", sort="updated", direction="desc")
         gh_repos_count = gh_repos.totalCount
-
-        rate_limit.add_calls(gh_repos_count)
 
         pages = gh_repos_count // GH_PAGE_LIMIT
 
@@ -245,11 +235,7 @@ def sync(
         ) as gh_progress:
 
             for r_int in range(0, pages):
-
-                rate_limit.check()
-
-                for gh_repo in gh_repos.get_page(r_int):
-
+                for gh_repo in utils.get_page_wrapper(gh_repos, r_int):
                     watchlist.add_repo(gh_repo)
                     repo_ids.append(gh_repo.id)
 
@@ -257,21 +243,15 @@ def sync(
 
     watchlist.prune(repo_ids)
 
-    # print(exclude_list)
-    rate_limit.update(show_rate_limit)
-
     import_yamls: list = []
     for gh_org in gh_orgs:
         search = f"org:{gh_org} path:.snyk.d filename:import language:yaml"
         import_repos: PaginatedList[ContentFile] = gh.search_code(query=search)
-        rate_limit.add_calls(import_repos.totalCount)
-        rate_limit.check("search")
-        filtered_repos: List = [
-            y for y in import_repos if y.repository.id not in exclude_list and y.name == "import.yaml"
-        ]
+        filtered_repos = []
+        for i in range(0, import_repos.totalCount):
+            current_page = get_page_wrapper(import_repos, i)
+            filtered_repos.extend(filter_chunk(current_page, exclude_list))
         import_yamls.extend(filtered_repos)
-
-    rate_limit.update(show_rate_limit)
 
     # we will likely want to put a limit around this, as we need to walk forked repose and try to get import.yaml
     # since github won't index a fork if it has less stars than upstream
@@ -281,9 +261,6 @@ def sync(
 
     if s.forks is True and len(forks) > 0:
         typer.echo(f"Scanning {len(forks)} forks for import.yaml", err=True)
-
-        rate_limit.add_calls(len(forks) * 2)
-        rate_limit.check()
 
         with typer.progressbar(forks, label="Scanning: ") as forks_progress:
             for fork in forks_progress:
@@ -302,7 +279,6 @@ def sync(
                     pprint(fork)
 
         typer.echo(f"Have {len(import_yamls)} Repos with an import.yaml", err=True)
-        rate_limit.update(show_rate_limit)
 
     if len(import_yamls) > 0:
         typer.echo(f"Loading import.yaml for non fork-ed repos", err=True)
@@ -324,8 +300,6 @@ def sync(
                             f"\ndumping repo object: {import_repo}\n"
                         )
 
-    rate_limit.update(show_rate_limit)
-
     # this calls our new Orgs object which caches and populates Snyk data locally for us
     all_orgs = Orgs(cache=str(s.cache_dir), groups=s.snyk_groups)
 
@@ -345,9 +319,6 @@ def sync(
 
     watchlist.save(cachedir=str(s.cache_dir))
     typer.echo("Sync completed", err=True)
-
-    if show_rate_limit is True:
-        rate_limit.total()
 
     del all_orgs
 

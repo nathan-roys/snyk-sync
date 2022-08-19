@@ -1,24 +1,22 @@
 import json
 import logging
 import os
+from api import v1_get_pages
 from datetime import datetime
+from pydantic import BaseModel
+from pydantic import Field
+from pydantic import UUID4
+from pydantic import validator
+from snyk.client import SnykClient
 from typing import Dict
 from typing import List
 from typing import Optional
-from uuid import UUID
-
-from api import v1_get_pages
-from pydantic import UUID4
-from pydantic import BaseModel
-from pydantic import Field
-from pydantic import validator
-from snyk.client import SnykClient
 from utils import jopen
 from utils import to_camel_case
 from utils import update_client
+from uuid import UUID
 
 from .repositories import Project
-
 
 logger = logging.getLogger(__name__)
 

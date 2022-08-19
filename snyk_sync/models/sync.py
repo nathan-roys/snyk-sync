@@ -1,15 +1,14 @@
 import json
 from datetime import datetime
+from github import Repository
 from pathlib import Path
+from pydantic import BaseModel
+from pydantic import UUID4
+from pydantic import error_wrappers
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
-
-from github import Repository
-from pydantic import UUID4
-from pydantic import BaseModel
-from pydantic import error_wrappers
 
 from .repositories import Branch
 from .repositories import Project

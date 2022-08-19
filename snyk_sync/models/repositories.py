@@ -1,13 +1,12 @@
-from datetime import datetime
-from typing import List
-from typing import Optional
-
 import yaml
+from datetime import datetime
 from github import ContentFile
-from pydantic import UUID4
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import UUID4
 from pydantic import validator
+from typing import List
+from typing import Optional
 
 
 class Source(BaseModel):
